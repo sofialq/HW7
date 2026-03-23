@@ -1,10 +1,7 @@
 import streamlit as st
 from openai import OpenAI
-from anthropic import Anthropic  # added missing import
+from anthropic import Anthropic
 import sys
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
 
 # working with chromadb on streamlit community cloud
 __import__('pysqlite3')
@@ -12,124 +9,15 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import chromadb
 
 
-# RAG db of news articles for large, global law firm to monitor news about its clients
-
-news_df = pd.read_csv('news.csv')
-
-# extract text from url
-def extract_text_from_url(url):
- 
-    '''
-    function to extract plain text from URL
- 
-    url: web address to fetch and parse
-    
-    returns extracted text string, or None if the request fails
-    '''
- 
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
- 
-        # parse html and extract text
-        soup = BeautifulSoup(response.text, 'html.parser')
-        for tag in soup(['script', 'style', 'noscript']):
-            tag.decompose()
- 
-        return soup.get_text(separator=' ', strip=True)
- 
-    except requests.RequestException as e:
-        print(f"Failed to fetch {url}: {e}")
-        return None
-    
-# chunk text
-def chunk_text(text):
-
-    '''
-    this function uses a fixed-sized chunking method as 
-    the goal is to create 2 mini documents. It is simple and
-    and straightfoward in achieving its goal. 
-    '''
-
-    mid = len(text) // 2
-    mid = text.find(' ', mid)  # find next space after midpoint- avoid chunking in the middle of a word
-    return [text[:mid], text[mid:]]
-
-# create chromadb client
-chroma_client = chromadb.PersistentClient(path="./ChromaDB_for_News")
-collection = chroma_client.get_or_create_collection("NewsCollection")
-
-# create openai and claude clients
+# create clients
 if "openai_client" not in st.session_state:
     st.session_state.openai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-if "claude_client" not in st.session_state:  # added missing claude client
+if "claude_client" not in st.session_state:
     st.session_state.claude_client = Anthropic(api_key=st.secrets["CLAUDE_API_KEY"])
 
-## using chromadb with openai embeddings ##
-
-def add_to_collection(collection, text, file_name):
-
-    '''
-    function to add documents to collections
-        
-    collection: chromadb collection, already established
-    text: articles from news_df
-    doc_id: identifier for document
-        
-    embeddings inserted into the collection from openai
-    '''
-        
-    chunks = chunk_text(text)
-
-    # create an embedding
-    openai_client = st.session_state.openai_client
-    for i, chunk in enumerate(chunks):
-        response = openai_client.embeddings.create(
-            input=chunk,
-            model='text-embedding-3-small'
-        )
-
-        # get embedding
-        embedding = response.data[0].embedding
-
-        # add embedding and document to chromadb
-        collection.add(
-            documents=[chunk],
-            ids=[f"{file_name}_chunk{i+1}"],
-            embeddings=[embedding]
-        )
-
-# populate collection with text
-def load_df_to_collection(df, collection, url_col='URL'):
-
-    '''
-    this function uses extract_text_from_url and 
-    add_to_collection to put articles in chromadb collection
-    '''
-
-    loaded_articles = []
-
-    # Loop through all rows in df
-    for i, row in df.iterrows():
-
-        # get article text
-        url = row[url_col]
-        text = extract_text_from_url(url)
-        if not text:
-            continue
-
-        doc_id = f"article_{i}"
-
-        # Add to ChromaDB
-        add_to_collection(collection, text, doc_id)
-
-        loaded_articles.append(doc_id)
-
-    return loaded_articles
-
-# check if collection is empty and load articles
-if collection.count() == 0:
-    loaded = load_df_to_collection(news_df, collection, url_col='URL')
+# load chromadb collection populated by chroma_db
+chroma_client = chromadb.PersistentClient(path="./ChromaDB_for_News")
+collection = chroma_client.get_or_create_collection("NewsCollection")
 
 def get_rag_context(query):
 
@@ -211,7 +99,6 @@ else:
 
 if "more_info" not in st.session_state:
     st.session_state.more_info = False
-
 
 # display chat history BEFORE input
 for msg in st.session_state.messages:
